@@ -1,15 +1,14 @@
 local UEHelpers = require("UEHelpers")
 
 local DAY_MULTIPLIER = 0.50
-local NIGHT_MULTIPLIER = 0.50
+local NIGHT_MULTIPLIER = 1.00
 local ACTIVE_MULTIPLIER = 0.50
+local MIN_MULTIPLIER = 0.01
+local MAX_MULTIPLIER = 100.0
 local LOG_INTERVAL_MS = 30000
 local SCALE_TICK_MS = 1000
 local PREFERRED_CONFIG_WRITE_PATH = "Mods\\MoorTime\\config.lua"
 local CONFIG_PATHS = {
-    "Mods\\MoorTime\\Scripts\\config.lua",
-    "ue4ss\\Mods\\MoorTime\\Scripts\\config.lua",
-    "Dreadmoor\\Binaries\\Win64\\ue4ss\\Mods\\MoorTime\\Scripts\\config.lua",
     "Mods\\MoorTime\\config.lua",
     "ue4ss\\Mods\\MoorTime\\config.lua",
     "Dreadmoor\\Binaries\\Win64\\ue4ss\\Mods\\MoorTime\\config.lua",
@@ -37,10 +36,39 @@ local State = {
     StatusAccumulatorMs = 0,
     LastIsDay = nil,
     ConfigPath = nil,
+    CanUseConfigContainer = true,
+    ScaleLoopHandle = nil,
 }
 
 local function Log(Message)
     print(string.format("[MoorTime] %s\n", Message))
+end
+
+local function ClampMultiplier(Value, Label)
+    if type(Value) ~= "number" then
+        Log(string.format("Invalid %s '%s'. Must be a number.", Label, tostring(Value)))
+        return nil
+    end
+
+    local clamped = Value
+    if clamped < MIN_MULTIPLIER then
+        clamped = MIN_MULTIPLIER
+    elseif clamped > MAX_MULTIPLIER then
+        clamped = MAX_MULTIPLIER
+    end
+
+    if clamped ~= Value then
+        Log(string.format(
+            "%s %.4f clamped to %.4f (allowed range %.2f..%.2f).",
+            Label,
+            Value,
+            clamped,
+            MIN_MULTIPLIER,
+            MAX_MULTIPLIER
+        ))
+    end
+
+    return clamped
 end
 
 local function PersistConfig()
@@ -52,18 +80,18 @@ local function PersistConfig()
         return false
     end
 
-    local configText = string.format(
-        "return {\n" ..
-        "    default_multiplier = %.4f,\n" ..
-        "    day_multiplier = %.4f,\n" ..
-        "    night_multiplier = %.4f,\n" ..
-        "    log_interval_ms = %d,\n" ..
-        "}\n",
-        DAY_MULTIPLIER,
-        DAY_MULTIPLIER,
-        NIGHT_MULTIPLIER,
-        LOG_INTERVAL_MS
-    )
+    local lines = {
+        "return {",
+    }
+    if DAY_MULTIPLIER == NIGHT_MULTIPLIER then
+        table.insert(lines, string.format("    default_multiplier = %.4f,", DAY_MULTIPLIER))
+    end
+    table.insert(lines, string.format("    day_multiplier = %.4f,", DAY_MULTIPLIER))
+    table.insert(lines, string.format("    night_multiplier = %.4f,", NIGHT_MULTIPLIER))
+    table.insert(lines, string.format("    log_interval_ms = %d,", LOG_INTERVAL_MS))
+    table.insert(lines, "}")
+    table.insert(lines, "")
+    local configText = table.concat(lines, "\n")
 
     local okWrite, writeErr = pcall(function()
         file:write(configText)
@@ -108,22 +136,31 @@ local function LoadConfig()
     State.ConfigPath = loadedPath
 
     local loadedDefault = nil
-    if type(loaded.default_multiplier) == "number" and loaded.default_multiplier > 0 then
-        loadedDefault = loaded.default_multiplier
-        DAY_MULTIPLIER = loaded.default_multiplier
-        NIGHT_MULTIPLIER = loaded.default_multiplier
+    if type(loaded.default_multiplier) == "number" then
+        local parsed = ClampMultiplier(loaded.default_multiplier, "default_multiplier")
+        if parsed then
+            loadedDefault = parsed
+            DAY_MULTIPLIER = parsed
+            NIGHT_MULTIPLIER = parsed
+        end
     elseif loaded.default_multiplier ~= nil then
         Log("Invalid config.default_multiplier, keeping defaults.")
     end
 
-    if type(loaded.day_multiplier) == "number" and loaded.day_multiplier > 0 then
-        DAY_MULTIPLIER = loaded.day_multiplier
+    if type(loaded.day_multiplier) == "number" then
+        local parsed = ClampMultiplier(loaded.day_multiplier, "day_multiplier")
+        if parsed then
+            DAY_MULTIPLIER = parsed
+        end
     elseif loaded.day_multiplier ~= nil then
         Log("Invalid config.day_multiplier, keeping current value.")
     end
 
-    if type(loaded.night_multiplier) == "number" and loaded.night_multiplier > 0 then
-        NIGHT_MULTIPLIER = loaded.night_multiplier
+    if type(loaded.night_multiplier) == "number" then
+        local parsed = ClampMultiplier(loaded.night_multiplier, "night_multiplier")
+        if parsed then
+            NIGHT_MULTIPLIER = parsed
+        end
     elseif loaded.night_multiplier ~= nil then
         Log("Invalid config.night_multiplier, keeping current value.")
     end
@@ -190,6 +227,10 @@ local function ResolveGametimeAsset()
 end
 
 local function GetSpeedContainer()
+    if not State.CanUseConfigContainer then
+        return nil
+    end
+
     local Asset = ResolveGametimeAsset()
     if not Asset:IsValid() then
         if not State.AssetResolveLogged then
@@ -272,26 +313,30 @@ local function RefreshActiveMultiplier(Subsystem)
 end
 
 local function ApplyActiveMultiplier(Multiplier)
-    if type(Multiplier) ~= "number" or Multiplier <= 0 then
-        Log(string.format("Invalid multiplier '%s'. Must be > 0.", tostring(Multiplier)))
+    local sanitized = ClampMultiplier(Multiplier, "multiplier")
+    if not sanitized then
         return false
     end
 
-    ACTIVE_MULTIPLIER = Multiplier
+    ACTIVE_MULTIPLIER = sanitized
     State.LastObservedGameTicks = nil
 
     local Subsystem = GetGameplayTimeSubsystem()
     if Subsystem:IsValid() then
         local hadOld, oldValue = TryGetSpeedFromSubsystem(Subsystem)
-        if TrySetSpeedOnSubsystem(Subsystem, Multiplier) then
+        if TrySetSpeedOnSubsystem(Subsystem, sanitized) then
             if hadOld then
-                Log(string.format("Subsystem GameplayTimeSpeedMultiplier %.4f -> %.4f", oldValue, Multiplier))
+                Log(string.format("Subsystem GameplayTimeSpeedMultiplier %.4f -> %.4f", oldValue, sanitized))
             else
-                Log(string.format("Subsystem GameplayTimeSpeedMultiplier set to %.4f", Multiplier))
+                Log(string.format("Subsystem GameplayTimeSpeedMultiplier set to %.4f", sanitized))
             end
         else
-            Log(string.format("Target multiplier set to %.4f (subsystem write not available).", Multiplier))
+            Log(string.format("Target multiplier set to %.4f (subsystem write not available).", sanitized))
         end
+    end
+
+    if not State.CanUseConfigContainer then
+        return true
     end
 
     local SpeedConfig = GetSpeedContainer()
@@ -300,7 +345,8 @@ local function ApplyActiveMultiplier(Multiplier)
     end
 
     local hadOld, oldValue = TryGetSpeedFromContainer(SpeedConfig)
-    if not TrySetSpeedOnContainer(SpeedConfig, Multiplier) then
+    if not TrySetSpeedOnContainer(SpeedConfig, sanitized) then
+        State.CanUseConfigContainer = false
         if not State.InstancedStructAccessLogged then
             State.InstancedStructAccessLogged = true
             Log("ConfigData[1] is an InstancedStruct; direct field mutation is not available in this UE4SS binding.")
@@ -309,9 +355,9 @@ local function ApplyActiveMultiplier(Multiplier)
     end
 
     if hadOld then
-        Log(string.format("Config GameplayTimeSpeedMultiplier %.4f -> %.4f", oldValue, Multiplier))
+        Log(string.format("Config GameplayTimeSpeedMultiplier %.4f -> %.4f", oldValue, sanitized))
     else
-        Log(string.format("Config GameplayTimeSpeedMultiplier set to %.4f", Multiplier))
+        Log(string.format("Config GameplayTimeSpeedMultiplier set to %.4f", sanitized))
     end
     return true
 end
@@ -357,12 +403,12 @@ GetGameplayTimeSubsystem = function()
 end
 
 local function SetDayMultiplier(Multiplier)
-    if type(Multiplier) ~= "number" or Multiplier <= 0 then
-        Log(string.format("Invalid day multiplier '%s'. Must be > 0.", tostring(Multiplier)))
+    local sanitized = ClampMultiplier(Multiplier, "day multiplier")
+    if not sanitized then
         return false
     end
 
-    DAY_MULTIPLIER = Multiplier
+    DAY_MULTIPLIER = sanitized
     local Subsystem = GetGameplayTimeSubsystem()
     local Active = RefreshActiveMultiplier(Subsystem)
     ApplyActiveMultiplier(Active)
@@ -371,12 +417,12 @@ local function SetDayMultiplier(Multiplier)
 end
 
 local function SetNightMultiplier(Multiplier)
-    if type(Multiplier) ~= "number" or Multiplier <= 0 then
-        Log(string.format("Invalid night multiplier '%s'. Must be > 0.", tostring(Multiplier)))
+    local sanitized = ClampMultiplier(Multiplier, "night multiplier")
+    if not sanitized then
         return false
     end
 
-    NIGHT_MULTIPLIER = Multiplier
+    NIGHT_MULTIPLIER = sanitized
     local Subsystem = GetGameplayTimeSubsystem()
     local Active = RefreshActiveMultiplier(Subsystem)
     ApplyActiveMultiplier(Active)
@@ -385,13 +431,13 @@ local function SetNightMultiplier(Multiplier)
 end
 
 local function SetUniformMultiplier(Multiplier)
-    if type(Multiplier) ~= "number" or Multiplier <= 0 then
-        Log(string.format("Invalid multiplier '%s'. Must be > 0.", tostring(Multiplier)))
+    local sanitized = ClampMultiplier(Multiplier, "multiplier")
+    if not sanitized then
         return false
     end
 
-    DAY_MULTIPLIER = Multiplier
-    NIGHT_MULTIPLIER = Multiplier
+    DAY_MULTIPLIER = sanitized
+    NIGHT_MULTIPLIER = sanitized
     local Subsystem = GetGameplayTimeSubsystem()
     local Active = RefreshActiveMultiplier(Subsystem)
     ApplyActiveMultiplier(Active)
@@ -506,15 +552,25 @@ local function ApplyRuntimeTimeScalingStep()
 end
 
 local function StartStatusLoop()
-    ExecuteInGameThreadWithDelay(SCALE_TICK_MS, function()
+    local function Tick()
         ApplyRuntimeTimeScalingStep()
         State.StatusAccumulatorMs = State.StatusAccumulatorMs + SCALE_TICK_MS
         if State.StatusAccumulatorMs >= LOG_INTERVAL_MS then
             State.StatusAccumulatorMs = 0
             LogTimeStatus()
         end
-        StartStatusLoop()
-    end)
+        if State.ScaleLoopHandle then
+            ExecuteInGameThreadWithDelay(State.ScaleLoopHandle, SCALE_TICK_MS, Tick)
+        else
+            State.ScaleLoopHandle = ExecuteInGameThreadWithDelay(SCALE_TICK_MS, Tick)
+        end
+    end
+
+    if State.ScaleLoopHandle then
+        ExecuteInGameThreadWithDelay(State.ScaleLoopHandle, SCALE_TICK_MS, Tick)
+    else
+        State.ScaleLoopHandle = ExecuteInGameThreadWithDelay(SCALE_TICK_MS, Tick)
+    end
 end
 
 local function TryHookGameplayTimeInitialize()
@@ -524,6 +580,14 @@ local function TryHookGameplayTimeInitialize()
 
     local ok, preId, postId = pcall(RegisterHook, "/Script/Dreadmoor.DrdGameplayTimeSubsystem:OnInitialize",
         function(selfParam, configParam)
+            local subsystem = nil
+            local okSubsystem, subsystemValue = pcall(function()
+                return selfParam:get()
+            end)
+            if okSubsystem then
+                subsystem = subsystemValue
+            end
+
             local okConfig, configValue = pcall(function()
                 return configParam:get()
             end)
@@ -532,7 +596,18 @@ local function TryHookGameplayTimeInitialize()
                 return
             end
 
-            local desired = GetPhaseMultiplier(State.LastIsDay)
+            local currentIsDay = State.LastIsDay
+            if subsystem and subsystem:IsValid() then
+                local okIsDay, isDayValue = pcall(function()
+                    return subsystem:GetIsDay()
+                end)
+                if okIsDay and type(isDayValue) == "boolean" then
+                    currentIsDay = isDayValue
+                    State.LastIsDay = isDayValue
+                end
+            end
+
+            local desired = GetPhaseMultiplier(currentIsDay)
             ACTIVE_MULTIPLIER = desired
 
             local readOk, oldValue = pcall(function()
@@ -612,14 +687,13 @@ RegisterConsoleCommandHandler("drd_time_set_night", function(FullCommand, Parame
     return true
 end)
 
-RegisterConsoleCommandHandler("drd_time_log", function(FullCommand, Parameters, Ar)
+local function HandleTimeGet()
     LogTimeStatus()
     return true
-end)
+end
 
 RegisterConsoleCommandHandler("drd_time_get", function(FullCommand, Parameters, Ar)
-    LogTimeStatus()
-    return true
+    return HandleTimeGet()
 end)
 
 RegisterConsoleCommandHandler("drd_time_reset", function(FullCommand, Parameters, Ar)

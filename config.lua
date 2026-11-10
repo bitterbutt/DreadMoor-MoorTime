@@ -1,7 +1,6 @@
 return {
-    default_multiplier = 0.50, -- Default multiplier applied when no specific day/night multiplier is set
-    -- Preferred keys:
-    day_multiplier = 0.50,
-    night_multiplier = 1.00,
+    default_multiplier = 1.0000,
+    day_multiplier = 0.5000,
+    night_multiplier = 1.0000,
     log_interval_ms = 30000,
 }
