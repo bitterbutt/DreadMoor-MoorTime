@@ -5,6 +5,7 @@ local NIGHT_MULTIPLIER = 0.50
 local ACTIVE_MULTIPLIER = 0.50
 local LOG_INTERVAL_MS = 30000
 local SCALE_TICK_MS = 1000
+local PREFERRED_CONFIG_WRITE_PATH = "Mods\\MoorTime\\config.lua"
 local CONFIG_PATHS = {
     "Mods\\MoorTime\\Scripts\\config.lua",
     "ue4ss\\Mods\\MoorTime\\Scripts\\config.lua",
@@ -35,14 +36,54 @@ local State = {
     LastObservedGameTicks = nil,
     StatusAccumulatorMs = 0,
     LastIsDay = nil,
+    ConfigPath = nil,
 }
 
 local function Log(Message)
     print(string.format("[MoorTime] %s\n", Message))
 end
 
+local function PersistConfig()
+    local configPath = State.ConfigPath or PREFERRED_CONFIG_WRITE_PATH
+
+    local file, openErr = io.open(configPath, "w")
+    if not file then
+        Log(string.format("Failed to open config for write '%s': %s", configPath, tostring(openErr)))
+        return false
+    end
+
+    local configText = string.format(
+        "return {\n" ..
+        "    default_multiplier = %.4f,\n" ..
+        "    day_multiplier = %.4f,\n" ..
+        "    night_multiplier = %.4f,\n" ..
+        "    log_interval_ms = %d,\n" ..
+        "}\n",
+        DAY_MULTIPLIER,
+        DAY_MULTIPLIER,
+        NIGHT_MULTIPLIER,
+        LOG_INTERVAL_MS
+    )
+
+    local okWrite, writeErr = pcall(function()
+        file:write(configText)
+        file:flush()
+        file:close()
+    end)
+
+    if not okWrite then
+        Log(string.format("Failed writing config '%s': %s", configPath, tostring(writeErr)))
+        return false
+    end
+
+    State.ConfigPath = configPath
+    Log(string.format("Saved config to '%s'.", configPath))
+    return true
+end
+
 local function LoadConfig()
     local loaded = nil
+    local loadedPath = nil
 
     for _, path in ipairs(CONFIG_PATHS) do
         local chunk, loadErr = loadfile(path)
@@ -50,6 +91,7 @@ local function LoadConfig()
             local ok, result = pcall(chunk)
             if ok and type(result) == "table" then
                 loaded = result
+                loadedPath = path
                 break
             end
             Log(string.format("Config '%s' failed to execute: %s", path, tostring(result)))
@@ -60,8 +102,10 @@ local function LoadConfig()
 
     if not loaded then
         Log("Using built-in defaults (config.lua not found).")
+        State.ConfigPath = PREFERRED_CONFIG_WRITE_PATH
         return
     end
+    State.ConfigPath = loadedPath
 
     local loadedDefault = nil
     if type(loaded.default_multiplier) == "number" and loaded.default_multiplier > 0 then
@@ -322,6 +366,7 @@ local function SetDayMultiplier(Multiplier)
     local Subsystem = GetGameplayTimeSubsystem()
     local Active = RefreshActiveMultiplier(Subsystem)
     ApplyActiveMultiplier(Active)
+    PersistConfig()
     return true
 end
 
@@ -335,6 +380,7 @@ local function SetNightMultiplier(Multiplier)
     local Subsystem = GetGameplayTimeSubsystem()
     local Active = RefreshActiveMultiplier(Subsystem)
     ApplyActiveMultiplier(Active)
+    PersistConfig()
     return true
 end
 
@@ -349,6 +395,7 @@ local function SetUniformMultiplier(Multiplier)
     local Subsystem = GetGameplayTimeSubsystem()
     local Active = RefreshActiveMultiplier(Subsystem)
     ApplyActiveMultiplier(Active)
+    PersistConfig()
     return true
 end
 
