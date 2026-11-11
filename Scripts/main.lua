@@ -3,6 +3,7 @@ local UEHelpers = require("UEHelpers")
 local DAY_MULTIPLIER = 0.50
 local NIGHT_MULTIPLIER = 1.00
 local ACTIVE_MULTIPLIER = 0.50
+local TIME_INPUT_MODE = "multiplier"
 local MIN_MULTIPLIER = 0.01
 local MAX_MULTIPLIER = 100.0
 local MULTIPLIER_TOLERANCE = 0.0001
@@ -98,6 +99,40 @@ local function ClampMultiplier(Value, Label)
     return clamped
 end
 
+local function ClampInputMode(Value)
+    if Value == "factor" then
+        return "factor"
+    end
+    return "multiplier"
+end
+
+local function MultiplierToLengthFactor(Multiplier)
+    if type(Multiplier) ~= "number" or Multiplier <= 0 then
+        return 1.0
+    end
+    return 1.0 / Multiplier
+end
+
+local function ConvertLengthFactorToMultiplier(Factor, Label)
+    if type(Factor) ~= "number" then
+        Log(string.format("Invalid %s '%s'. Must be a number.", Label, tostring(Factor)))
+        return nil
+    end
+    if Factor <= 0 then
+        Log(string.format("Invalid %s '%.4f'. Must be > 0.", Label, Factor))
+        return nil
+    end
+
+    local multiplier = 1.0 / Factor
+    local clamped = ClampMultiplier(multiplier, Label)
+    if not clamped then
+        return nil
+    end
+
+    Log(string.format("%s %.4f -> multiplier %.4f", Label, Factor, clamped))
+    return clamped
+end
+
 local function PersistConfig()
     local configPath = State.ConfigPath or PREFERRED_CONFIG_WRITE_PATH
 
@@ -110,8 +145,12 @@ local function PersistConfig()
     local lines = {
         "-- MoorTime config",
         "-- Multipliers affect in-game time progression (1.0 = default speed).",
+        "-- Factors control desired day/night length (2.0 = twice as long, 0.5 = half as long).",
         "-- Runtime changes from console commands are persisted to this file.",
         "return {",
+        "    -- Input mode: \"multiplier\" or \"factor\"",
+        string.format("    time_input_mode = %q,", ClampInputMode(TIME_INPUT_MODE)),
+        "",
         "    -- Time scaling",
     }
     if DAY_MULTIPLIER == NIGHT_MULTIPLIER then
@@ -119,6 +158,13 @@ local function PersistConfig()
     end
     table.insert(lines, string.format("    day_multiplier = %.4f,", DAY_MULTIPLIER))
     table.insert(lines, string.format("    night_multiplier = %.4f,", NIGHT_MULTIPLIER))
+    table.insert(lines, "")
+    table.insert(lines, "    -- Length factors (derived from multipliers, optional for editing)")
+    if DAY_MULTIPLIER == NIGHT_MULTIPLIER then
+        table.insert(lines, string.format("    default_length_factor = %.4f,", MultiplierToLengthFactor(DAY_MULTIPLIER)))
+    end
+    table.insert(lines, string.format("    day_length_factor = %.4f,", MultiplierToLengthFactor(DAY_MULTIPLIER)))
+    table.insert(lines, string.format("    night_length_factor = %.4f,", MultiplierToLengthFactor(NIGHT_MULTIPLIER)))
     table.insert(lines, string.format("    log_interval_ms = %d,", LOG_INTERVAL_MS))
     table.insert(lines, string.format("    runtime_scale_tick_ms = %d,", SCALE_TICK_MS))
     table.insert(lines, "")
@@ -183,38 +229,78 @@ local function LoadConfig()
     end
     State.ConfigPath = loadedPath
 
+    if type(loaded.time_input_mode) == "string" then
+        local mode = ClampInputMode(loaded.time_input_mode)
+        TIME_INPUT_MODE = mode
+        if mode ~= loaded.time_input_mode then
+            Log(string.format("Invalid config.time_input_mode '%s', using 'multiplier'.", tostring(loaded.time_input_mode)))
+        end
+    elseif loaded.time_input_mode ~= nil then
+        Log("Invalid config.time_input_mode, using 'multiplier'.")
+    end
+
     local loadedDefault = nil
-    if type(loaded.default_multiplier) == "number" then
-        local parsed = ClampMultiplier(loaded.default_multiplier, "default_multiplier")
-        if parsed then
-            loadedDefault = parsed
-            DAY_MULTIPLIER = parsed
-            NIGHT_MULTIPLIER = parsed
+    local loadedDay = nil
+    local loadedNight = nil
+
+    if TIME_INPUT_MODE == "factor" then
+        if type(loaded.default_length_factor) == "number" then
+            loadedDefault = ConvertLengthFactorToMultiplier(loaded.default_length_factor, "default_length_factor")
+        elseif loaded.default_length_factor ~= nil then
+            Log("Invalid config.default_length_factor, keeping defaults.")
         end
-    elseif loaded.default_multiplier ~= nil then
-        Log("Invalid config.default_multiplier, keeping defaults.")
+
+        if type(loaded.day_length_factor) == "number" then
+            loadedDay = ConvertLengthFactorToMultiplier(loaded.day_length_factor, "day_length_factor")
+        elseif loaded.day_length_factor ~= nil then
+            Log("Invalid config.day_length_factor, keeping current value.")
+        end
+
+        if type(loaded.night_length_factor) == "number" then
+            loadedNight = ConvertLengthFactorToMultiplier(loaded.night_length_factor, "night_length_factor")
+        elseif loaded.night_length_factor ~= nil then
+            Log("Invalid config.night_length_factor, keeping current value.")
+        end
+
+        if loadedDefault == nil and loadedDay == nil and loadedNight == nil then
+            Log("No factor keys in config, falling back to multiplier keys.")
+            TIME_INPUT_MODE = "multiplier"
+        end
     end
 
-    if type(loaded.day_multiplier) == "number" then
-        local parsed = ClampMultiplier(loaded.day_multiplier, "day_multiplier")
-        if parsed then
-            DAY_MULTIPLIER = parsed
+    if TIME_INPUT_MODE == "multiplier" then
+        if type(loaded.default_multiplier) == "number" then
+            loadedDefault = ClampMultiplier(loaded.default_multiplier, "default_multiplier")
+        elseif loaded.default_multiplier ~= nil then
+            Log("Invalid config.default_multiplier, keeping defaults.")
         end
-    elseif loaded.day_multiplier ~= nil then
-        Log("Invalid config.day_multiplier, keeping current value.")
+
+        if type(loaded.day_multiplier) == "number" then
+            loadedDay = ClampMultiplier(loaded.day_multiplier, "day_multiplier")
+        elseif loaded.day_multiplier ~= nil then
+            Log("Invalid config.day_multiplier, keeping current value.")
+        end
+
+        if type(loaded.night_multiplier) == "number" then
+            loadedNight = ClampMultiplier(loaded.night_multiplier, "night_multiplier")
+        elseif loaded.night_multiplier ~= nil then
+            Log("Invalid config.night_multiplier, keeping current value.")
+        end
     end
 
-    if type(loaded.night_multiplier) == "number" then
-        local parsed = ClampMultiplier(loaded.night_multiplier, "night_multiplier")
-        if parsed then
-            NIGHT_MULTIPLIER = parsed
-        end
-    elseif loaded.night_multiplier ~= nil then
-        Log("Invalid config.night_multiplier, keeping current value.")
+    if loadedDefault then
+        DAY_MULTIPLIER = loadedDefault
+        NIGHT_MULTIPLIER = loadedDefault
+    end
+    if loadedDay then
+        DAY_MULTIPLIER = loadedDay
+    end
+    if loadedNight then
+        NIGHT_MULTIPLIER = loadedNight
     end
 
-    if loadedDefault == nil and loaded.day_multiplier == nil and loaded.night_multiplier == nil then
-        Log("No multiplier keys in config, keeping defaults.")
+    if loadedDefault == nil and loadedDay == nil and loadedNight == nil then
+        Log("No scaling keys in config, keeping defaults.")
     end
 
     ACTIVE_MULTIPLIER = DAY_MULTIPLIER
@@ -238,6 +324,16 @@ local function LoadConfig()
         HUD_TIME_FONT_SIZE = math.floor(loaded.hud_time_font_size)
     elseif loaded.hud_time_font_size ~= nil then
         Log("Invalid config.hud_time_font_size, keeping default 12.")
+    end
+
+    if type(loaded.hud_time_font_object_path) == "string" then
+        if loaded.hud_time_font_object_path ~= "" then
+            HUD_TIME_FONT_OBJECT_PATH = loaded.hud_time_font_object_path
+        else
+            HUD_TIME_FONT_OBJECT_PATH = nil
+        end
+    elseif loaded.hud_time_font_object_path ~= nil then
+        Log("Invalid config.hud_time_font_object_path, ignoring.")
     end
 
     if type(loaded.hud_time_shadow_alpha) == "number" and loaded.hud_time_shadow_alpha >= 0 and loaded.hud_time_shadow_alpha <= 1 then
@@ -277,7 +373,8 @@ local function LoadConfig()
     end
 
     Log(string.format(
-        "Config loaded: day_multiplier=%.4f, night_multiplier=%.4f, log_interval_ms=%d, scale_tick_ms=%d, font_size=%d, toast=%s",
+        "Config loaded: mode=%s, day_multiplier=%.4f, night_multiplier=%.4f, log_interval_ms=%d, scale_tick_ms=%d, font_size=%d, toast=%s",
+        TIME_INPUT_MODE,
         DAY_MULTIPLIER,
         NIGHT_MULTIPLIER,
         LOG_INTERVAL_MS,
@@ -1106,6 +1203,7 @@ RegisterConsoleCommandHandler("drd_time_set", function(FullCommand, Parameters, 
         return true
     end
 
+    TIME_INPUT_MODE = "multiplier"
     SetUniformMultiplier(NewMultiplier)
     LogTimeStatus()
     return true
@@ -1123,6 +1221,7 @@ RegisterConsoleCommandHandler("drd_time_set_day", function(FullCommand, Paramete
         return true
     end
 
+    TIME_INPUT_MODE = "multiplier"
     SetDayMultiplier(NewMultiplier)
     LogTimeStatus()
     return true
@@ -1140,6 +1239,76 @@ RegisterConsoleCommandHandler("drd_time_set_night", function(FullCommand, Parame
         return true
     end
 
+    TIME_INPUT_MODE = "multiplier"
+    SetNightMultiplier(NewMultiplier)
+    LogTimeStatus()
+    return true
+end)
+
+RegisterConsoleCommandHandler("drd_time_set_length", function(FullCommand, Parameters, Ar)
+    if #Parameters < 1 then
+        Log("Usage: drd_time_set_length <factor>")
+        return true
+    end
+
+    local NewFactor = tonumber(Parameters[1])
+    if not NewFactor then
+        Log(string.format("Could not parse length factor '%s'.", tostring(Parameters[1])))
+        return true
+    end
+
+    local NewMultiplier = ConvertLengthFactorToMultiplier(NewFactor, "time length factor")
+    if not NewMultiplier then
+        return true
+    end
+
+    TIME_INPUT_MODE = "factor"
+    SetUniformMultiplier(NewMultiplier)
+    LogTimeStatus()
+    return true
+end)
+
+RegisterConsoleCommandHandler("drd_time_set_day_length", function(FullCommand, Parameters, Ar)
+    if #Parameters < 1 then
+        Log("Usage: drd_time_set_day_length <factor>")
+        return true
+    end
+
+    local NewFactor = tonumber(Parameters[1])
+    if not NewFactor then
+        Log(string.format("Could not parse day length factor '%s'.", tostring(Parameters[1])))
+        return true
+    end
+
+    local NewMultiplier = ConvertLengthFactorToMultiplier(NewFactor, "day length factor")
+    if not NewMultiplier then
+        return true
+    end
+
+    TIME_INPUT_MODE = "factor"
+    SetDayMultiplier(NewMultiplier)
+    LogTimeStatus()
+    return true
+end)
+
+RegisterConsoleCommandHandler("drd_time_set_night_length", function(FullCommand, Parameters, Ar)
+    if #Parameters < 1 then
+        Log("Usage: drd_time_set_night_length <factor>")
+        return true
+    end
+
+    local NewFactor = tonumber(Parameters[1])
+    if not NewFactor then
+        Log(string.format("Could not parse night length factor '%s'.", tostring(Parameters[1])))
+        return true
+    end
+
+    local NewMultiplier = ConvertLengthFactorToMultiplier(NewFactor, "night length factor")
+    if not NewMultiplier then
+        return true
+    end
+
+    TIME_INPUT_MODE = "factor"
     SetNightMultiplier(NewMultiplier)
     LogTimeStatus()
     return true
@@ -1200,6 +1369,7 @@ RegisterConsoleCommandHandler("drd_time_validate", function(FullCommand, Paramet
 end)
 
 RegisterConsoleCommandHandler("drd_time_reset", function(FullCommand, Parameters, Ar)
+    TIME_INPUT_MODE = "multiplier"
     SetUniformMultiplier(1.0)
     LogTimeStatus()
     return true

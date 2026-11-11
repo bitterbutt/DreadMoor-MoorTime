@@ -1,15 +1,16 @@
 # MoorTime (UE4SS Mod for DREADMOOR)
 
-MoorTime is a UE4SS Lua mod that lets you control DREADMOOR in-game time speed with separate **day** and **night** multipliers, runtime console commands, and a HUD clock/notification overlay.
+MoorTime is a UE4SS Lua mod that lets you control DREADMOOR in-game time speed with separate **day** and **night** multipliers or length factors, runtime console commands, and a HUD clock/notification overlay.
 
 ## Features
 
-- Separate day/night time scaling
+- Separate day/night time scaling using multipliers or length factors
+- Flexible input modes: configure using multipliers (speed scale) or factors (desired length ratio)
 - Runtime scaling loop (works even when direct config-struct mutation is unavailable)
 - Console commands for live tuning
-- Config persistence when changing multipliers via console
+- Config persistence when changing multipliers/factors via console
 - HUD in-game clock (`HH:MM`)
-- Optional HUD toast on multiplier changes
+- Optional HUD toast on multiplier/factor changes
 
 ## Requirements
 
@@ -26,12 +27,26 @@ MoorTime is a UE4SS Lua mod that lets you control DREADMOOR in-game time speed w
 
 ## Console Commands
 
+### Multiplier Mode (speed scaling)
+
 - `drd_time_set <multiplier>`
   - Sets both day and night multipliers.
 - `drd_time_set_day <multiplier>`
   - Sets day-only multiplier.
 - `drd_time_set_night <multiplier>`
   - Sets night-only multiplier.
+
+### Factor Mode (desired length)
+
+- `drd_time_set_length <factor>`
+  - Sets both day and night length factors.
+- `drd_time_set_day_length <factor>`
+  - Sets day-only length factor.
+- `drd_time_set_night_length <factor>`
+  - Sets night-only length factor.
+
+### General Commands
+
 - `drd_time_get`
   - Logs current state and game time.
 - `drd_time_validate`
@@ -40,21 +55,41 @@ MoorTime is a UE4SS Lua mod that lets you control DREADMOOR in-game time speed w
   - Resets both multipliers to `1.0`.
 
 > Valid multiplier range: `0.01` to `100.0`.
+> Length factors work inversely: `2.0` = twice as long, `0.5` = half as long.
 
 ## Configuration
 
 Edit `config.lua`:
 
+### Time Input Mode
+
+- `time_input_mode` — Choose `"multiplier"` or `"factor"` to determine how console commands and config interpret values.
+
+### Multiplier Mode Settings
+
+Used when `time_input_mode = "multiplier"`:
+
 - `default_multiplier` (optional convenience when day/night are equal)
-- `day_multiplier`
-- `night_multiplier`
-- `log_interval_ms`
-- `runtime_scale_tick_ms`
-- `hud_time_font_size`
-- `hud_time_font_object_path` (optional)
-- `hud_multiplier_toast_enabled`
-- `hud_multiplier_toast_ms`
-- `hud_multiplier_toast_show_value`
+- `day_multiplier` — Speed multiplier for day (1.0 = normal speed, 0.5 = half speed, 2.0 = double speed)
+- `night_multiplier` — Speed multiplier for night
+
+### Factor Mode Settings
+
+Used when `time_input_mode = "factor"` (optional):
+
+- `default_length_factor` (convenience setting)
+- `day_length_factor` — Desired day length ratio (1.0 = normal, 2.0 = twice as long, 0.5 = half as long)
+- `night_length_factor` — Desired night length ratio
+
+### Common Settings
+
+- `log_interval_ms` — Status log frequency
+- `runtime_scale_tick_ms` — Runtime scaling update interval
+- `hud_time_font_size` — Clock display font size
+- `hud_time_font_object_path` (optional) — Custom font object path
+- `hud_multiplier_toast_enabled` — Show toast notifications on changes
+- `hud_multiplier_toast_ms` — Toast notification duration
+- `hud_multiplier_toast_show_value` — Display value in toast
 
 ### Font path format
 
