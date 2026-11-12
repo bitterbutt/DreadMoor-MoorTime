@@ -233,7 +233,8 @@ local function LoadConfig()
         local mode = ClampInputMode(loaded.time_input_mode)
         TIME_INPUT_MODE = mode
         if mode ~= loaded.time_input_mode then
-            Log(string.format("Invalid config.time_input_mode '%s', using 'multiplier'.", tostring(loaded.time_input_mode)))
+            Log(string.format("Invalid config.time_input_mode '%s', using 'multiplier'.",
+                tostring(loaded.time_input_mode)))
         end
     elseif loaded.time_input_mode ~= nil then
         Log("Invalid config.time_input_mode, using 'multiplier'.")
@@ -813,6 +814,38 @@ local function ResolveHudTimeTextWidget()
     return CreateInvalidObject()
 end
 
+local function BuildFontAssetCandidates(rawPath)
+    local candidates = {}
+    local seen = {}
+    local function push(path)
+        if type(path) == "string" and path ~= "" and not seen[path] then
+            table.insert(candidates, path)
+            seen[path] = true
+        end
+    end
+
+    if type(rawPath) ~= "string" then
+        return candidates
+    end
+
+    push(rawPath)
+
+    local objectDot = string.match(rawPath, "%.[^%.]+$")
+    if objectDot then
+        local packagePath = string.gsub(rawPath, "%.[^%.]+$", "")
+        if packagePath ~= rawPath then
+            push(packagePath)
+        end
+    else
+        local lastSegment = string.match(rawPath, "([^/]+)$")
+        if lastSegment then
+            push(rawPath .. "." .. lastSegment)
+        end
+    end
+
+    return candidates
+end
+
 local function ApplyHudTimeStyle(timeTextWidget)
     if State.HudTimeStyleApplied then
         return
@@ -823,17 +856,7 @@ local function ApplyHudTimeStyle(timeTextWidget)
         if font then
             font.Size = HUD_TIME_FONT_SIZE
             if HUD_TIME_FONT_OBJECT_PATH and HUD_TIME_FONT_OBJECT_PATH ~= "" then
-                local tryPaths = {
-                    HUD_TIME_FONT_OBJECT_PATH,
-                }
-                local objectDot = string.match(HUD_TIME_FONT_OBJECT_PATH, "%.[^%.]+$")
-                if objectDot then
-                    local packagePath = string.gsub(HUD_TIME_FONT_OBJECT_PATH, "%.[^%.]+$", "")
-                    if packagePath ~= HUD_TIME_FONT_OBJECT_PATH then
-                        table.insert(tryPaths, packagePath)
-                    end
-                end
-
+                local tryPaths = BuildFontAssetCandidates(HUD_TIME_FONT_OBJECT_PATH)
                 local fontObject = nil
                 local usedPath = nil
                 for _, candidatePath in ipairs(tryPaths) do
@@ -849,7 +872,8 @@ local function ApplyHudTimeStyle(timeTextWidget)
                     font.FontObject = fontObject
                     Log(string.format("Loaded HUD font asset: %s", usedPath))
                 else
-                    Log(string.format("Failed to load HUD font asset: %s", HUD_TIME_FONT_OBJECT_PATH))
+                    Log(string.format("Failed to load HUD font asset from %s. Tried: %s", HUD_TIME_FONT_OBJECT_PATH,
+                        table.concat(tryPaths, ", ")))
                 end
             end
             timeTextWidget:SetFont(font)

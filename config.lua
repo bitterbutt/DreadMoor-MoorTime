@@ -10,18 +10,19 @@ return {
     default_multiplier = 0.5000,
     day_multiplier = 0.5000,
     night_multiplier = 1.0000,
+
     -- Length factors (derived from multipliers, optional for editing)
-    default_length_factor = 2.0000,
-    day_length_factor = 2.0000,
+    default_length_factor = 1.0000,
+    day_length_factor = 1.0000,
     night_length_factor = 1.0000,
     log_interval_ms = 30000,
     runtime_scale_tick_ms = 16,
 
     -- HUD clock styling
     hud_time_font_size = 12,
-    -- Optional font object path. Leave empty to use widget default.
+    -- Optional font object path.
     -- Example: "/Game/Dreadmoor/UI/Fonts/Font_OldSoviet.Font_OldSoviet"
-    hud_time_font_object_path = "",
+    hud_time_font_object_path = "/Game/Dreadmoor/UI/Fonts/Font_OldSoviet.Font_OldSoviet",
 
     -- HUD toast on multiplier changes
     hud_multiplier_toast_enabled = true,
